@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "jigg manifest v0.1",
+  "type": "object",
+  "required": ["version", "puzzle"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "puzzle": {
+      "type": "object",
+      "required": ["image", "pieceCount", "pieces", "solved"],
+      "properties": {
+        "image": {
+          "type": "object",
+          "required": ["type", "src", "width", "height"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["embedded", "external"],
+              "description": "embedded = file inside zip. external = src is a URL."
+            },
+            "src": { "type": "string" },
+            "width": { "type": "integer" },
+            "height": { "type": "integer" }
+          }
+        },
+        "pieceCount": {
+          "type": "integer",
+          "description": "Hint only. Not authoritative. pieces.json is the source of truth."
+        },
+        "pieces": {
+          "type": "object",
+          "required": ["source"],
+          "properties": {
+            "source": { "type": "string" }
+          }
+        },
+        "solved": {
+          "type": "object",
+          "required": ["source"],
+          "description": "Canonical solved positions. Immutable. Part of puzzle definition.",
+          "properties": {
+            "source": { "type": "string" }
+          }
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "description": "Optional. A .jigg without state is a valid shareable puzzle.",
+      "properties": {
+        "source": { "type": "string" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Informational only. No functional role.",
+      "properties": {
+        "title": { "type": "string" }
+      }
+    }
+  }
+}
