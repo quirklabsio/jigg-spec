@@ -2,8 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "jigg manifest v0.1",
   "type": "object",
-  "required": ["version", "puzzle"],
+  "required": ["id", "version", "puzzle"],
   "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "UUID v4. Identifies the puzzle definition. Assigned at creation, stable forever. Used by libraries to deduplicate and associate saved progress with the correct puzzle."
+    },
     "version": {
       "type": "string",
       "const": "0.1"
@@ -14,7 +19,7 @@
       "properties": {
         "image": {
           "type": "object",
-          "required": ["type", "src", "width", "height"],
+          "required": ["type", "src", "width", "height", "checksum"],
           "properties": {
             "type": {
               "type": "string",
@@ -23,7 +28,12 @@
             },
             "src": { "type": "string" },
             "width": { "type": "integer" },
-            "height": { "type": "integer" }
+            "height": { "type": "integer" },
+            "checksum": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "SHA-256 checksum of the source image bytes. Format: 'sha256:' followed by exactly 64 lowercase hex characters. Computed over raw file bytes prior to any container encoding. SHA-256 is the only supported algorithm in v0.1."
+            }
           }
         },
         "pieceCount": {
@@ -32,17 +42,27 @@
         },
         "pieces": {
           "type": "object",
-          "required": ["source"],
+          "required": ["source", "checksum"],
           "properties": {
-            "source": { "type": "string" }
+            "source": { "type": "string" },
+            "checksum": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "SHA-256 checksum of the pieces.json file bytes prior to any container encoding."
+            }
           }
         },
         "solved": {
           "type": "object",
-          "required": ["source"],
+          "required": ["source", "checksum"],
           "description": "Canonical solved positions. Immutable. Part of puzzle definition.",
           "properties": {
-            "source": { "type": "string" }
+            "source": { "type": "string" },
+            "checksum": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "SHA-256 checksum of the solved.json file bytes prior to any container encoding."
+            }
           }
         }
       }
