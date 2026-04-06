@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "jigg state v0.2",
+  "description": "Standalone sidecar file recording one user's progress on a puzzle. Not embedded in the .jigg archive.",
+  "type": "object",
+  "required": ["puzzleId", "version", "manifestHash", "stages", "pieces"],
+  "definitions": {
+    "Pos": {
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": false,
+      "description": "Normalized position, image-relative. Stage 0 (freeform): [0,1] = within image bounds, clamped [-2,3]. Stage 1+ (managed): tray-relative hint, or absent if UI auto-sorts.",
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 3
+        },
+        "y": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 3
+        }
+      }
+    }
+  },
+  "properties": {
+    "puzzleId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "UUID v4. Must match the id field in the target .jigg manifest. Readers MUST reject mismatches."
+    },
+    "version": {
+      "type": "string",
+      "const": "0.2"
+    },
+    "manifestHash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "SHA-256 of manifest.json at save time. Used for three-tier integrity check on load."
+    },
+    "lastPlayed": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 datetime of the most recent save."
+    },
+    "completionStatus": {
+      "type": "string",
+      "enum": ["not_started", "in_progress", "completed"]
+    },
+    "gridDimensions": {
+      "type": "object",
+      "description": "Required when puzzle has no pieces.json (procedural grid). If present and does not match app-derived grid, app MUST start a new session.",
+      "required": ["cols", "rows"],
+      "properties": {
+        "cols": { "type": "integer", "minimum": 1 },
+        "rows": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stages": {
+      "type": "array",
+      "description": "Named environments. stages[0] MUST have id 0 and type 'freeform' (the workspace). Additional stages are user-defined trays.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "type"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0 = workspace. 1+ = user-defined tray. Referenced by pieces[].stageId."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable label e.g. 'Workspace', 'The Tray', 'Sky Pieces'."
+          },
+          "type": {
+            "type": "string",
+            "enum": ["freeform", "managed"],
+            "description": "freeform: pos/rot/z are meaningful, snap and physics run. managed: engine renders a sorted list, pos may be absent or tray-relative."
+          }
+        }
+      }
+    },
+    "pieces": {
+      "type": "array",
+      "description": "Current state of all tracked pieces. Pieces absent from this array are treated as not yet placed.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Piece ID from pieces.json (whimsy) or grid_{col}_{row} (raw procedural)."
+          },
+          "pos": {
+            "$ref": "#/definitions/Pos"
+          },
+          "rot": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMaximum": 360,
+            "description": "Degrees [0, 360). Persisted across all stages. Managed stages MAY ignore this for UI layout but MUST preserve it for state integrity."
+          },
+          "z": {
+            "type": "integer",
+            "description": "Layering order. Higher = on top. Meaningful for freeform stages. Managed stages SHOULD respect this if the tray allows overlapping pieces."
+          },
+          "c": {
+            "type": "string",
+            "description": "Cluster ID. Pieces sharing the same c value move as a rigid body. Absent = piece is unconnected."
+          },
+          "stageId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "ID of the stage this piece is on. Absent or null = stage 0 (workspace). Writers SHOULD omit for workspace pieces."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "jigg pieces v0.1",
+  "description": "Piece geometry and canonical solved positions. Authoritative source for piece count, die-line shapes, and solved layout.",
+  "type": "object",
+  "required": ["pieces"],
+  "properties": {
+    "pieces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "canonical"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable identifier, unique within the puzzle."
+          },
+          "path": {
+            "type": "string",
+            "description": "SVG path data in absolute image pixel coordinates. Must be closed (ends with Z). Permitted commands: M, L, C, Q, Z."
+          },
+          "canonical": {
+            "type": "object",
+            "required": ["x", "y", "rotation"],
+            "description": "Solved position of this piece. Immutable.",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Normalized x position of the piece's bounding box center, relative to image width."
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Normalized y position of the piece's bounding box center, relative to image height."
+              },
+              "rotation": {
+                "type": "number",
+                "minimum": 0,
+                "exclusiveMaximum": 360,
+                "description": "Degrees [0, 360). Always 0 in a standard solved layout."
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Optional implementation-defined data. shapeName is reserved for whimsy piece labels.",
+            "properties": {
+              "shapeName": {
+                "type": "string",
+                "description": "Whimsy label e.g. 'Bird', 'Star', 'Anchor'."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

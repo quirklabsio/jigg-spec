@@ -1,84 +1,92 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "jigg manifest v0.1",
+  "title": "jigg manifest v0.1.2",
   "type": "object",
   "required": ["id", "version", "puzzle"],
   "properties": {
     "id": {
       "type": "string",
       "format": "uuid",
-      "description": "UUID v4. Identifies the puzzle definition. Assigned at creation, stable forever. Used by libraries to deduplicate and associate saved progress with the correct puzzle."
+      "description": "UUID v4. Stable puzzle identity. Used by libraries and .jiggstate for puzzle matching."
     },
     "version": {
       "type": "string",
-      "const": "0.1"
+      "description": "Spec version string. Used to detect breaking changes on open."
     },
-    "puzzle": {
+    "metadata": {
       "type": "object",
-      "required": ["image", "pieceCount", "pieces", "solved"],
+      "description": "UI hints only. Engine never relies on these to function.",
       "properties": {
-        "image": {
+        "title": {
+          "type": "string"
+        },
+        "aspectRatio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Pre-computed image.width / image.height. Informational. image.width and image.height are authoritative."
+        },
+        "thumbnail": {
           "type": "object",
-          "required": ["type", "src", "width", "height", "checksum"],
           "properties": {
-            "type": {
+            "path": {
               "type": "string",
-              "enum": ["embedded", "external"],
-              "description": "embedded = file inside zip. external = src is a URL."
+              "description": "Internal path to thumb.jpg within the archive."
             },
-            "src": { "type": "string" },
-            "width": { "type": "integer" },
-            "height": { "type": "integer" },
-            "checksum": {
+            "hash": {
               "type": "string",
               "pattern": "^sha256:[a-f0-9]{64}$",
-              "description": "SHA-256 checksum of the source image bytes. Format: 'sha256:' followed by exactly 64 lowercase hex characters. Computed over raw file bytes prior to any container encoding. SHA-256 is the only supported algorithm in v0.1."
-            }
-          }
-        },
-        "pieceCount": {
-          "type": "integer",
-          "description": "Hint only. Not authoritative. pieces.json is the source of truth."
-        },
-        "pieces": {
-          "type": "object",
-          "required": ["source", "checksum"],
-          "properties": {
-            "source": { "type": "string" },
-            "checksum": {
-              "type": "string",
-              "pattern": "^sha256:[a-f0-9]{64}$",
-              "description": "SHA-256 checksum of the pieces.json file bytes prior to any container encoding."
-            }
-          }
-        },
-        "solved": {
-          "type": "object",
-          "required": ["source", "checksum"],
-          "description": "Canonical solved positions. Immutable. Part of puzzle definition.",
-          "properties": {
-            "source": { "type": "string" },
-            "checksum": {
-              "type": "string",
-              "pattern": "^sha256:[a-f0-9]{64}$",
-              "description": "SHA-256 checksum of the solved.json file bytes prior to any container encoding."
+              "description": "SHA-256 of thumb.jpg. Advisory — mismatch does not fail the load."
             }
           }
         }
       }
     },
-    "state": {
+    "puzzle": {
       "type": "object",
-      "description": "Optional. A .jigg without state is a valid shareable puzzle.",
+      "required": ["image"],
       "properties": {
-        "source": { "type": "string" }
-      }
-    },
-    "metadata": {
-      "type": "object",
-      "description": "Informational only. No functional role.",
-      "properties": {
-        "title": { "type": "string" }
+        "image": {
+          "type": "object",
+          "required": ["source", "path", "hash", "width", "height"],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["embedded", "url"],
+              "description": "embedded = file inside ZIP. url = HTTP/HTTPS URL. local-fs reserved for future use."
+            },
+            "path": {
+              "type": "string",
+              "description": "Filename within the archive (embedded) or full URL (url)."
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "SHA-256 of image file bytes prior to ZIP compression. Mismatch = non-fatal warning."
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "pieces": {
+          "type": "object",
+          "required": ["path", "hash"],
+          "description": "Present = explicit geometry. Absent = procedural grid. Presence is the signal — no type field needed.",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Filename of pieces.json within the archive."
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "SHA-256 of pieces.json bytes prior to ZIP compression. Mismatch = fatal for state. App enters ReadOnly or prompts Reset."
+            }
+          }
+        }
       }
     }
   }
