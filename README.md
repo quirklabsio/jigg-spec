@@ -1,25 +1,41 @@
-# .jigg Format Specification (v0.1.2-draft)
+# jigg-spec
 
-A `.jigg` file is a portable, sovereign digital jigsaw puzzle container. It uses a **Blueprint/Instance** model to strictly separate immutable puzzle geometry from volatile user progress.
+Type definitions and file format specification for the `.jigg`, `.jiggsaw`,
+and `.jiggstate` file formats.
 
-## Core Philosophy
-- **Local-First:** Designed for offline-capable, browser-based applications.
-- **Data Sovereignty:** The user owns the puzzle (`.jigg`) and their work (`.jiggstate`).
-- **Resolution Independence:** Uses normalized coordinates for transforms and SVG paths for geometry.
+## Files
 
-## File Ecosystem
-| Extension | Role | Format | Status |
-| :--- | :--- | :--- | :--- |
-| **`.jigg`** | The Blueprint | ZIP Archive | Immutable Master |
-| **`.jiggstate`** | The Instance | JSON Sidecar | Volatile Progress |
+- `types.ts` — TypeScript interfaces and types. Source of truth for all
+  format contracts.
+- `spec.md` — Human-readable specification. Documents structure, rationale,
+  and architectural decisions.
 
-## Documentation
-- [Overview](./draft/overview.md) — Architecture & Goals
-- [Container](./draft/container.md) — ZIP structure & MimeType
-- [Manifest](./draft/manifest.md) — The `manifest.json` entry point
-- [Pieces](./draft/pieces.md) — SVG Paths & Normalized Transforms
-- [State](./draft/jiggstate.md) — The `.jiggstate` Sidecar Spec
-- [Decisions](./draft/decisions.md) — The "Why" behind the format
+## Formats
 
----
-*Status: Draft (pre-1.0). Maintained alongside the Jigg reference implementation. Breaking changes are expected.*
+| Format | Role |
+|---|---|
+| `.jigg` | User-facing bundle — the only format users interact with |
+| `.jiggsaw` | Artist product — immutable, marketplace distributed |
+| `.jiggstate` | Playthrough instance — internal to `.jigg` |
+
+## Key Concepts
+
+- `.jigg` always contains a `.jiggsaw`. It is the anchor.
+- `.jiggstate` is never distributed standalone.
+- Filename is UX only — consumers always key on internal `uri`.
+- Holy Trinity (`mimetype`, `header.json`, `thumb.webp`) uncompressed —
+  shelf renders without decompression.
+- `glue.json` in `.jiggstate` uncompressed — fast-fail identity check
+  before decompression.
+- `STAGE_TABLE` is the primary workspace. `STAGE_BENCH` is the system
+  origin stage — pieces flow out, never back in.
+- `placed: boolean` owns correctness — not stage identity.
+- `meanColor` is immutable. Palette mapping is runtime.
+- Clusters derived at runtime by grouping on `clusterId`. Reconstruction:
+  lowest PieceDefinition.index member is group origin.
+- `stageId` is always explicit — never absent.
+- Status derived: lastSavedAt absent = not-started, present = in-progress,
+  completed = true = completed.
+- JiggUri type union is locked — artist, org, puzzle, state only.
+
+See `spec.md` for full documentation.
