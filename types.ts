@@ -22,8 +22,17 @@ export type StageId =
   | typeof STAGE_BENCH
   | string;
 
+export type KnownAttributionRole =
+  | "artist"
+  | "illustrator"
+  | "photographer"
+  | "publisher"
+  | "brand";
+
+export type AttributionRole = KnownAttributionRole | (string & {});
+
 export interface Attribution {
-  role: "artist" | "illustrator" | "photographer" | "publisher" | "brand" | string;
+  role: AttributionRole;
   name: string;
   uri?: JiggUri;
 }

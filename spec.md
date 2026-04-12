@@ -289,6 +289,11 @@ Rules not enforceable by the type system — engine must implement:
 - placed === true implies stageId === STAGE_TABLE and clusterId absent
 - assemblyProgress guard: return undefined or 1.0 when pieceCount === 1
 - Rotation mode set once at game creation — never mutated on assembly
+- Engines MUST normalize PieceState.rot to a valid value for the active rotation
+  mode on load and on every write:
+  - cardinal mode: MUST be one of {0, 90, 180, 270}. Nearest wins on invalid
+    input. Ties MUST round to the next clockwise cardinal value.
+  - free mode: MUST be in [0, 360). Wrap on invalid input.
 - playTimeSeconds increments only during active interaction
 - clusterId is NanoID(8) — generated fresh at every snap event
 - displayCredit derived from credit if present, else attributions[0].name
