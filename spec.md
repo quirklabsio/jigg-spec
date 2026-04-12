@@ -104,7 +104,7 @@ Zip entry table:
 
 No `header.json` — .jiggsaw is not shelf-scanned.
 
-`JiggSawManifest`:
+`JiggManifest`:
 - `uri` — canonical identity, locally generated, stable forever
 - `specVersion` — for parsing
 - `title`, `aspectRatio`
@@ -175,14 +175,15 @@ Zip entry table:
 
 `glue.json` — named after puzzle glue, the physical product used to seal and
 preserve a completed jigsaw. Here it permanently binds the playthrough to the
-puzzle. Stored uncompressed for zero-decompression fast-fail identity checks.
+puzzle. Written once at game creation, never mutated. Stored uncompressed for
+zero-decompression fast-fail identity checks.
 Engine reads glue.json before decompressing anything else. If puzzleUri
 mismatches the current .jigg bundle, load is aborted immediately.
 
 `JiggGlue`:
 - `uri` — playthrough identity, generated at game creation, stable forever.
   Enables device sync, conflict resolution, future multiplayer.
-- `puzzleUri` — references JiggSawManifest.uri. Identity anchor.
+- `puzzleUri` — references JiggManifest.uri. Identity anchor.
 - `manifestHash` — SHA-256 of manifest.json at game creation time.
   puzzleUri confirms identity — manifestHash confirms version.
   On load: if hash differs, check manifest.integrity fields to understand
@@ -214,11 +215,24 @@ Palette logic:
 - `placed === true` implies `stageId === STAGE_TABLE` and `clusterId` absent
 
 Cluster model:
-- Clusters derived at runtime — never stored explicitly
-- `clusterId` is NanoID(8) — generated at snap time
-- Collision-free across devices and sessions without central authority
-- Reconstruction: group by clusterId, sort by PieceDefinition.index,
-  lowest-index member pos is group origin, all others are offsets
+
+clusterId is authoritative state, generated at snap time using NanoID(8).
+On save: write each piece's current group ID as clusterId.
+On load: group pieces by clusterId to reconstruct runtime groups.
+Derive group origin from the lowest PieceDefinition.index member's world pos.
+All other members' local offsets are computed from that origin.
+
+Cluster merging: larger group survives. If equal size, the cluster whose
+origin piece has the lower PieceDefinition.index survives. Absorbed group
+ID is deleted. Absorbed pieces take the survivor ID. The surviving cluster's
+origin piece (lowest PieceDefinition.index) MUST remain fixed in world space.
+All absorbed piece positions MUST be recomputed relative to that origin.
+
+No cluster breakup exists.
+placed === true implies clusterId is absent.
+Engine MUST enforce this invariant immediately on transition.
+clusterId MUST be absent for STAGE_BENCH pieces.
+clusterId MUST be absent for all pieces at game creation.
 
 Progress metrics:
 - `placedCount` — pieces correctly solved at canonical position.
@@ -255,7 +269,7 @@ ZIP-aware tool without knowing the spec.
 header.json designed to remain under 1KB. All fields are scalars.
 
 `JiggHeader`:
-- `uri` — references JiggSawManifest.uri
+- `uri` — references JiggManifest.uri
 - `specVersion` — for parsing
 - `title`, `displayCredit`, `aspectRatio` — cached from manifest at import
 - `pieceCount` — cached from dissection, never changes after game creation
@@ -289,11 +303,14 @@ Rules not enforceable by the type system — engine must implement:
 - placed === true implies stageId === STAGE_TABLE and clusterId absent
 - assemblyProgress guard: return undefined or 1.0 when pieceCount === 1
 - Rotation mode set once at game creation — never mutated on assembly
-- Engines MUST normalize PieceState.rot to a valid value for the active rotation
-  mode on load and on every write:
-  - cardinal mode: MUST be one of {0, 90, 180, 270}. Nearest wins on invalid
-    input. Ties MUST round to the next clockwise cardinal value.
-  - free mode: MUST be in [0, 360). Wrap on invalid input.
+- Only cardinal rotation exists. RotationConfig = { mode: "cardinal" }.
+  Free rotation is not part of the model.
+- Engines MUST write only normalized values to PieceState.rot.
+  Normalization on load is a safety net for invalid or legacy data only.
+  Normalization steps, applied in order:
+  1. Wrap input to [0, 360) — handles negative values and values ≥ 360
+  2. Snap to nearest of {0, 90, 180, 270} using angular distance modulo 360
+  3. Ties round to the next clockwise cardinal
 - playTimeSeconds increments only during active interaction
 - clusterId is NanoID(8) — generated fresh at every snap event
 - displayCredit derived from credit if present, else attributions[0].name
@@ -308,6 +325,8 @@ Rules not enforceable by the type system — engine must implement:
 | `.jigg` is the only user format | Users never handle .jiggsaw or .jiggstate directly |
 | Holy Trinity uncompressed | Zero-decompression shelf rendering |
 | `glue.json` uncompressed in .jiggstate | Fast-fail identity check before decompression |
+| `JiggManifest` not `JiggSawManifest` | Concept-only naming throughout. Manifest belongs to the puzzle, not the format container. |
+| `JiggGlue` named after puzzle glue | Physical metaphor — permanently seals playthrough to puzzle. Written once, never mutated. |
 | `glue.json` named after puzzle glue | Physical metaphor — seals playthrough to puzzle permanently |
 | No header on .jiggstate | Progress lives in .jigg header |
 | `SpecVersion` not SemVer | Patch versions meaningless for a file format |
@@ -326,7 +345,10 @@ Rules not enforceable by the type system — engine must implement:
 | `RotationConfig` discriminated union | Forces mode decision at game creation — avoids floating-point bugs |
 | Clusters derived at runtime | clusterId shared value sufficient — explicit cluster records redundant |
 | Cluster reconstruction convention | Lowest PieceDefinition.index is group origin — deterministic |
+| Cluster merge tie-breaker on equal size | Lower origin index survives. Fully deterministic across devices with no coordination. |
+| Bench-entry `clusterId` rule removed | Dead code — bench is one-way, re-entry is impossible. Invariant alone is sufficient. |
 | NanoID(8) for clusterId | Collision-free across devices without central authority |
+| Engines MUST write only normalized `rot` | Prevents lazy-write implementations. Normalization on load is legacy safety net only. |
 | `assemblyProgress` cached on header | Structural completion visible on shelf without decompression |
 | `playTimeSeconds` on assembly | Cannot be reconstructed — must be tracked explicitly |
 | Per-player playTimeSeconds | Each .jiggstate tracks independently — multiplayer safe |

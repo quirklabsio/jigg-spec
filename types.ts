@@ -37,7 +37,7 @@ export interface Attribution {
   uri?: JiggUri;
 }
 
-export interface JiggSawManifest {
+export interface JiggManifest {
   uri: JiggUri;
   specVersion: SpecVersion;
   title: string;
@@ -61,7 +61,7 @@ export interface JiggSawManifest {
 
 export interface JiggSaw {
   mimetype: "application/jiggsaw+zip";
-  manifest: JiggSawManifest;
+  manifest: JiggManifest;
   dissection?: JiggDissection;
   assets: Record<string, ArrayBuffer>;
 }
@@ -101,6 +101,11 @@ export interface JiggDissection {
   whimsies?: Record<string, WhimsyDefinition>;
 }
 
+/**
+ * Named after puzzle glue — the physical product used to seal and preserve
+ * a completed jigsaw. JiggGlue permanently binds a playthrough to its puzzle.
+ * Written once at game creation, never mutated.
+ */
 export interface JiggGlue {
   uri: JiggUri;
   puzzleUri: JiggUri;
@@ -121,8 +126,23 @@ export interface PieceState {
   id: string;
   stageId: StageId;
   pos?: Point;
-  rot?: number;
+  /**
+   * Degrees. Cardinal mode: must be one of {0, 90, 180, 270}.
+   * Always present, including bench pieces.
+   * Assigned randomly at game creation. Carries over unchanged on extraction
+   * from bench. Engines MUST write only normalized values — normalization on
+   * load is a safety net for invalid or legacy data only.
+   */
+  rot: number;
   z?: number;
+  /**
+   * Authoritative. Generated at snap time (NanoID 8).
+   * Absent = unconnected.
+   * placed === true implies clusterId is absent.
+   * Engine MUST enforce this invariant immediately on transition.
+   * MUST be absent for STAGE_BENCH pieces — no clustering on bench.
+   * MUST be absent for all pieces at game creation.
+   */
   clusterId?: string;
   placed?: boolean;
 }
