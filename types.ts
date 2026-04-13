@@ -7,8 +7,9 @@ export type SpecVersion = `${number}.${number}`;
 export type ImageSource = "embedded" | "url";
 export type EdgeType    = "corner" | "edge" | "interior";
 
-type JiggUriType = "artist" | "org" | "puzzle" | "state";
-export type JiggUri = `jigg:${JiggUriType}:${string}`;
+type CoreUriType = "artist" | "org" | "puzzle" | "state";
+type ExtensionUriType = `${string}.${string}`;
+export type JiggUri = `jigg:${CoreUriType | ExtensionUriType}:${string}`;
 
 export interface Point {
   x: number;
@@ -17,10 +18,11 @@ export interface Point {
 
 export const STAGE_TABLE = "table" as const;
 export const STAGE_BENCH = "bench" as const;
+export type UserStageId = string;
 export type StageId =
   | typeof STAGE_TABLE
   | typeof STAGE_BENCH
-  | string;
+  | UserStageId;
 
 export type KnownAttributionRole =
   | "artist"
@@ -118,16 +120,24 @@ export interface StageDefinition {
   name: string;
 }
 
-export type RotationConfig =
-  | { mode: "cardinal"; value: 0 | 1 | 2 | 3 }
-  | { mode: "free";     value: number };
-
 export interface PieceState {
   id: string;
   stageId: StageId;
+  /**
+   * Position in a single global coordinate space.
+   * MUST be present iff stageId !== STAGE_BENCH.
+   * Absent for STAGE_BENCH — engine owns bench layout and does not persist it.
+   * Bench pieces do not have a position and do not participate in the
+   * coordinate space until extracted.
+   * For transitions between non-bench stages, MUST NOT be transformed —
+   * stage changes are logical only.
+   * Exception: cluster merge operations may recompute pos of absorbed pieces
+   * to maintain rigid group structure. The surviving cluster's origin piece
+   * (lowest PieceDefinition.index) MUST remain fixed in world space.
+   */
   pos?: Point;
   /**
-   * Degrees. Cardinal mode: must be one of {0, 90, 180, 270}.
+   * Degrees. Must be one of {0, 90, 180, 270}.
    * Always present, including bench pieces.
    * Assigned randomly at game creation. Carries over unchanged on extraction
    * from bench. Engines MUST write only normalized values — normalization on
@@ -144,12 +154,11 @@ export interface PieceState {
    * MUST be absent for all pieces at game creation.
    */
   clusterId?: string;
-  placed?: boolean;
+  placed: boolean;
 }
 
 export interface JiggAssembly {
   specVersion: SpecVersion;
-  rotation: RotationConfig;
   playTimeSeconds?: number;
   palette?: HexCode[];
   stages: StageDefinition[];
@@ -176,8 +185,14 @@ export interface JiggHeader {
   placedCount: number;
   assemblyProgress?: number;
   playTimeSeconds?: number;
-  completed: boolean;
+  /**
+   * SHA-256 of assembly.json, computed over its exact byte contents
+   * as stored in the archive (no reformatting, normalization, or parsing).
+   * Absent if never saved.
+   */
+  assemblyHash?: string;
   lastSavedAt?: string;
+  // completed is derived: placedCount === pieceCount
 }
 
 export interface Jigg {

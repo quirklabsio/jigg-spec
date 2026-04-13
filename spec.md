@@ -34,7 +34,9 @@ Key principles:
 `JiggUri`:
 - URN semantics — identity not location
 - Format: `jigg:{type}:{token}` where token is Base62 NanoID (22 chars)
-- Locked types: `artist`, `org`, `puzzle`, `state` — no open string fallback
+- Core types (reserved): `artist`, `org`, `puzzle`, `state`
+- Extension types: namespaced with at least one dot e.g. `jigg:cut.template:abc123`
+- Unknown types MUST NOT cause load failure — treated as opaque identifiers
 - `artist` — individual creators
 - `org` — institutions, brands, publishers e.g. The Met, BearPark
 - `puzzle` — puzzle product identity
@@ -56,27 +58,32 @@ Deferred: Attribution Registry — maps JiggUri to full entity records.
 
 ## 4. Stage System
 
-Three classes of stages:
+STAGE_TABLE and STAGE_BENCH are required spec-defined stages.
+All pieces MUST be initialised in STAGE_BENCH at game creation.
 
-**`STAGE_TABLE = "table"`** — the primary workspace
-- Infinite, pannable
-- Where pieces are freely moved, clustered, organised
-- Where pieces lock when `placed === true`
-- Bidirectional with user trays
-- Named for interaction behavior, not correctness role
-- Correctness is owned by `placed: boolean` — not the stage
+The lifecycle is: bench → table. Placement is a state transition, not a stage.
+"placed" is not a stage — it is a boolean flag indicating correctness.
 
-**`STAGE_BENCH = "bench"`** — the system origin stage
-- All pieces start here at game creation
-- Remove-only once exited — pieces flow out, never back in
-- Engine must reject any move where `targetStageId === STAGE_BENCH`
-  unless `sourceStageId === STAGE_BENCH` (rearranging within bench allowed)
-- Not user-owned, not user-created
+STAGE_BENCH is a one-way origin. Pieces MUST NOT transition into STAGE_BENCH
+after leaving it.
 
-**User trays** — `string` (NanoID 8 chars e.g. `"V1StGXab"`)
-- Named, user-defined, organisational
-- Bidirectional with table and other user trays
-- Engine must never generate a user tray ID of `"table"` or `"bench"`
+User tray IDs are typed as UserStageId (string).
+Engine MUST NOT generate a UserStageId of "table" or "bench".
+
+The global coordinate space is a 2D Cartesian plane with arbitrary origin
+and scale, defined by the engine. All persisted PieceState.pos values exist
+in this coordinate space.
+
+Pieces in STAGE_BENCH do not have a position and do not participate in the
+coordinate space until extracted.
+
+Stage membership is logical only — it does not define a coordinate system.
+For transitions between non-bench stages, pos MUST NOT be transformed.
+On transition from STAGE_BENCH to any other stage, engine MUST assign a valid
+pos in global coordinate space before the piece is written to state.
+
+Exception: cluster merge operations may recompute pos of absorbed pieces
+to maintain rigid group structure.
 
 Ghost tray safety net: if `PieceState.stageId` references a stage that no
 longer exists in `stages[]`, engine moves those pieces back to `STAGE_TABLE`.
@@ -87,7 +94,8 @@ Movement rules:
 - `STAGE_TABLE ↔ user tray`: allowed
 - `Anywhere → STAGE_BENCH`: rejected
 
-Narrative: `bench → table → placed`
+Stages are organisational containers. Rendering, layout, and UX treatment
+of each stage is an engine concern.
 
 ---
 
@@ -192,15 +200,36 @@ mismatches the current .jigg bundle, load is aborted immediately.
 
 `JiggAssembly`:
 
-`RotationConfig` discriminated union:
-- `cardinal` — snaps to 0/90/180/270, stored as index 0|1|2|3
-- `free` — stored as degrees [0, 360)
-- Mode set at game creation, never changes for this playthrough
+Rotation is cardinal only. Engines MUST support exactly four orientations:
+0, 90, 180, 270 degrees. No configuration exists — this is fixed for all
+playthroughs and all engines.
 
-Palette logic:
-- Absent = engine uses meanColor directly for filtering
-- Present = engine maps meanColor to nearest centroid (Euclidean, sRGB)
-- Regeneration updates palette array only — no piece records touched
+PieceState.rot stores degrees as a number. Valid values are {0, 90, 180, 270}.
+
+Engines MUST write only normalized values to PieceState.rot.
+Normalization on load is a safety net for invalid or legacy data only.
+
+Normalization steps, applied in order:
+1. Wrap input to [0, 360) — handles negative values and values ≥ 360
+2. Snap to nearest of {0, 90, 180, 270} using angular distance modulo 360
+3. Ties round to the next clockwise cardinal
+
+At game creation, engine assigns a random cardinal rotation to every piece.
+This value is written to PieceState.rot immediately and persists across sessions.
+Rotation is persisted playthrough state.
+
+User interaction MUST NOT allow rotation while a piece remains in STAGE_BENCH.
+On transition from STAGE_BENCH to any other stage, the existing rot value
+carries over unchanged and becomes user-manipulable.
+
+Initial rotation is a playthrough concern — not defined by the dissection.
+
+Palette:
+Default palette computed at game creation via k-means on piece meanColor values.
+User may regenerate palette — new centroids overwrite JiggAssembly.palette.
+Palette persists across sessions as a playthrough preference.
+Engine maps each piece's meanColor to nearest centroid (Euclidean, sRGB) at runtime.
+If palette absent, engine uses meanColor directly.
 
 `playTimeSeconds`:
 - Active play time in seconds. Source of truth on assembly.
@@ -211,8 +240,27 @@ Palette logic:
 
 `PieceState`:
 - `stageId` is always explicit — never absent
-- All pieces initialised to STAGE_BENCH at game creation
-- `placed === true` implies `stageId === STAGE_TABLE` and `clusterId` absent
+- `pos` MUST be present iff `stageId !== STAGE_BENCH`
+
+Game creation invariants — ALL of the following MUST hold for every piece:
+- stageId === STAGE_BENCH
+- pos is absent
+- rot is a valid cardinal value (0 | 90 | 180 | 270)
+- placed === false
+- clusterId is absent
+
+No clusters exist at game creation. The starting graph is fully disconnected.
+
+`placed`:
+placed: boolean is the sole correctness authority. Non-optional.
+Engine sets placed: true when a piece locks to its canonical position.
+placed is a state flag — it is not a stage and does not imply a stage transition.
+Engines SHOULD ensure placed pieces reside in STAGE_TABLE.
+placed === true implies clusterId is absent.
+Engine MUST enforce this invariant immediately on transition.
+
+If an engine allows a placed piece to become unplaced, it MUST be treated
+as a new unconnected piece with clusterId absent and placed: false.
 
 Cluster model:
 
@@ -221,6 +269,10 @@ On save: write each piece's current group ID as clusterId.
 On load: group pieces by clusterId to reconstruct runtime groups.
 Derive group origin from the lowest PieceDefinition.index member's world pos.
 All other members' local offsets are computed from that origin.
+
+Cluster merge is only valid when all participating pieces satisfy snap
+conditions, including rotation compatibility. Engines MUST NOT merge
+clusters with incompatible rotations.
 
 Cluster merging: larger group survives. If equal size, the cluster whose
 origin piece has the lower PieceDefinition.index survives. Absorbed group
@@ -234,18 +286,38 @@ Engine MUST enforce this invariant immediately on transition.
 clusterId MUST be absent for STAGE_BENCH pieces.
 clusterId MUST be absent for all pieces at game creation.
 
+`JiggGlue`:
+JiggGlue is named after puzzle glue — the physical product used to seal
+and preserve a completed jigsaw. It permanently binds a playthrough to its
+puzzle. Written once at game creation, never mutated.
+
+Fields:
+- uri: playthrough identity, generated at game creation, stable forever
+- puzzleUri: references JiggManifest.uri — identity anchor
+- manifestHash: SHA-256 of manifest.json at game creation time
+- createdAt: ISO 8601 — when this playthrough was started
+
+On load, engines MUST treat JiggGlue as immutable. Any mismatch between
+glue.puzzleUri and the loaded puzzle's uri MUST be treated as invalid
+state — load MUST be aborted.
+
+A .jigg contains at most one JiggState. Starting a new game overwrites
+the existing .jiggstate entirely. The previous playthrough is not preserved.
+JiggGlue.uri is stable for the life of a single playthrough only — a new
+game generates a new uri.
+
 Progress metrics:
 - `placedCount` — pieces correctly solved at canonical position.
   Exact canonical match. Never loosened.
 - `assemblyProgress` — `1 - (clusterCount - 1) / (pieceCount - 1)`.
   0.0 = all pieces separate. 1.0 = single cluster.
-  Guard required: undefined when pieceCount === 1.
+  Guard required: return 1.0 when pieceCount === 1. Clamp to [0, 1].
 - `playTimeSeconds` — cached on header from assembly on every save.
 
 Status derivation (engine and UI must follow):
-- `lastSavedAt` absent → "not-started"
-- `lastSavedAt` present + `completed === false` → "in-progress"
-- `completed === true` → "completed"
+- `lastSavedAt` absent → not-started
+- `lastSavedAt` present + `placedCount < pieceCount` → in-progress
+- `placedCount === pieceCount` → completed
 
 ---
 
@@ -268,19 +340,35 @@ ZIP-aware tool without knowing the spec.
 
 header.json designed to remain under 1KB. All fields are scalars.
 
-`JiggHeader`:
+JiggHeader is a write-through cache. MUST be recomputed from authoritative
+sources on every save.
+
+Fields:
 - `uri` — references JiggManifest.uri
 - `specVersion` — for parsing
 - `title`, `displayCredit`, `aspectRatio` — cached from manifest at import
 - `pieceCount` — cached from dissection, never changes after game creation
-- `placedCount`, `assemblyProgress`, `playTimeSeconds` — cached on every save
-- `completed` — true when placedCount === pieceCount
+- `placedCount`, `assemblyProgress`, `playTimeSeconds` — updated on every save
+- `assemblyHash` — SHA-256 of assembly.json, computed over its exact byte
+  contents as stored in the archive (no reformatting, normalization, or
+  parsing). Absent if never saved. On load: if present, hash the current
+  assembly.json byte contents and compare. If mismatch, recompute header
+  from authoritative sources before use. Header is self-healing —
+  mismatches are corrected, not fatal.
 - `lastSavedAt` — absent until first save. Presence = started.
+- `completed` is derived: placedCount === pieceCount. Not stored.
+
+assemblyProgress = 1 - (clusterCount - 1) / (pieceCount - 1)
+Guard: return 1.0 when pieceCount === 1. Clamp to [0, 1].
+
+Status derivation:
+- lastSavedAt absent → not-started
+- lastSavedAt present + placedCount < pieceCount → in-progress
+- placedCount === pieceCount → completed
 
 Authoritative sources:
 - puzzle.jiggsaw → uri, title, displayCredit, aspectRatio, pieceCount
-- state.jiggstate → placedCount, assemblyProgress, playTimeSeconds,
-  completed, lastSavedAt
+- state.jiggstate → placedCount, assemblyProgress, playTimeSeconds, lastSavedAt
 
 ---
 
@@ -297,24 +385,23 @@ Applies to all three formats.
 Rules not enforceable by the type system — engine must implement:
 
 - All pieces initialised to STAGE_BENCH at game creation
-- Engine must never assign `"table"` or `"bench"` as a user tray ID
+- Engine MUST NOT assign `"table"` or `"bench"` as a UserStageId
 - Movement to STAGE_BENCH rejected unless source is also STAGE_BENCH
 - Ghost tray: pieces referencing missing stageId move to STAGE_TABLE
-- placed === true implies stageId === STAGE_TABLE and clusterId absent
-- assemblyProgress guard: return undefined or 1.0 when pieceCount === 1
-- Rotation mode set once at game creation — never mutated on assembly
-- Only cardinal rotation exists. RotationConfig = { mode: "cardinal" }.
-  Free rotation is not part of the model.
-- Engines MUST write only normalized values to PieceState.rot.
-  Normalization on load is a safety net for invalid or legacy data only.
-  Normalization steps, applied in order:
-  1. Wrap input to [0, 360) — handles negative values and values ≥ 360
-  2. Snap to nearest of {0, 90, 180, 270} using angular distance modulo 360
-  3. Ties round to the next clockwise cardinal
+- On bench extraction: engine MUST assign a valid pos before writing state
+- placed === true implies clusterId absent; engine enforces immediately
+- Engines SHOULD ensure placed pieces reside in STAGE_TABLE
+- assemblyProgress guard: return 1.0 when pieceCount === 1; clamp to [0, 1]
+- Cardinal rotation only — engines MUST write only normalized rot values
+- rot normalization: wrap to [0, 360), snap to nearest cardinal, ties clockwise
+- Random cardinal rot assigned to every piece at game creation
+- No rotation interaction while piece is in STAGE_BENCH
 - playTimeSeconds increments only during active interaction
 - clusterId is NanoID(8) — generated fresh at every snap event
+- Engines MUST NOT merge clusters with incompatible rotations
 - displayCredit derived from credit if present, else attributions[0].name
-- Reserved stage strings: "table" and "bench" must not be used as user tray IDs
+- JiggGlue.puzzleUri mismatch on load is fatal — abort immediately
+- assemblyHash on header computed over exact archive bytes, no reformatting
 
 ---
 
@@ -325,37 +412,50 @@ Rules not enforceable by the type system — engine must implement:
 | `.jigg` is the only user format | Users never handle .jiggsaw or .jiggstate directly |
 | Holy Trinity uncompressed | Zero-decompression shelf rendering |
 | `glue.json` uncompressed in .jiggstate | Fast-fail identity check before decompression |
-| `JiggManifest` not `JiggSawManifest` | Concept-only naming throughout. Manifest belongs to the puzzle, not the format container. |
-| `JiggGlue` named after puzzle glue | Physical metaphor — permanently seals playthrough to puzzle. Written once, never mutated. |
-| `glue.json` named after puzzle glue | Physical metaphor — seals playthrough to puzzle permanently |
+| `JiggGlue` named after puzzle glue | Physical metaphor — seals playthrough to puzzle permanently |
 | No header on .jiggstate | Progress lives in .jigg header |
 | `SpecVersion` not SemVer | Patch versions meaningless for a file format |
-| `JiggUri` locked type union | No open string fallback — new types require spec change |
-| `JiggUri` over UUID | Self-describing, portable, offline-first, no remapping on publish |
+| `JiggUri` locked core type union | No open string fallback — new core types require spec change |
+| Extension URI types namespaced | Third-party types are distinguishable and safe to ignore |
+| `JiggManifest` not `JiggSawManifest` | Concept-only naming. Manifest belongs to the puzzle, not the format container. |
 | `artist` vs `org` URI types | Distinct marketplace browsing — by person vs by institution |
 | `STAGE_TABLE` named for interaction | Stage names reflect behavior, not correctness semantics |
-| `placed: boolean` owns correctness | Decoupled from stage identity — table is just a workspace |
-| `STAGE_BENCH` remove-only | One-way valve — pieces never return once extracted |
+| `STAGE_BENCH` required and one-way | Deterministic lifecycle: bench → table. Eliminates dual initialisation paths. |
+| `placed` is a state flag, not a stage | Prevents implementors treating placement as a stage transition |
+| `placed` sole correctness authority | Decoupled from stage — stage is a consequence of placement, not a co-constraint |
+| Engines SHOULD move placed pieces to `STAGE_TABLE` | Preserves expected UX without hard-coupling placed to stage |
+| `placed === true` implies `clusterId` absent | A placed piece is solved and individual — group membership ends at placement |
+| Unplaced piece rule | Keeps invariant total if UX evolves to allow unplacing |
 | `stageId` always explicit | Eliminates undefined/bench ambiguity in serialization |
-| `meanColor` immutable on PieceDefinition | Palette mapping is runtime — regenerating palette touches one array not 500+ records |
+| `UserStageId` type | Makes user tray ID intent explicit in the type system |
+| No clustering on bench | Bench is a clean start — no pre-grouping, no merge edge cases |
+| No clusters at game creation | Guarantees fully disconnected starting graph |
+| `clusterId` authoritative | Deriving from spatial graph introduces edge cases and cross-device divergence |
+| Cluster merge tie-breaker on equal size | Lower origin index survives — fully deterministic with no coordination |
+| Cluster merge origin fixed in world space | Absorbed pieces recompute — deterministic across devices |
+| Rotation compatibility required for cluster merge | Prevents half-rotated cluster bugs — snap conditions must be satisfied |
+| `RotationConfig` removed entirely | Cardinal rotation is not configurable — a type with only one valid value is not configuration |
+| Cardinal rotation only | Free rotation undermines crisp `placed` semantics and deterministic snapping |
+| Rotation normalization: wrap then snap | Handles all real number inputs including negatives. Deterministic across engines. |
+| Engines MUST write only normalized `rot` | Prevents lazy-write implementations. Normalization on load is legacy safety net only. |
+| Random cardinal rotation at game creation | Physical scattered appearance. Engine concern — not defined by dissection. |
+| No rotation interaction on bench | Bench is a staging area. Rotation becomes active on extraction. |
+| `rot` persists for bench pieces | Rotation is playthrough state even before extraction |
+| `pos` absent iff `STAGE_BENCH` | Bench layout is ephemeral and engine-owned |
+| Single global coordinate space | No transforms on stage transition. Clusters trivial. No drift. |
+| `pos` stability scoped to non-bench transitions | Bench → table creates pos for the first time — no-transform rule applies between non-bench stages only |
+| Global coordinate space engine-defined | No implicit normalization assumed. Origin and scale are engine concerns. |
+| `meanColor` immutable on `PieceDefinition` | Palette mapping is runtime — regenerating palette touches one array not 500+ records |
 | sRGB + Euclidean distance | Deterministic palette mapping across clients |
-| `palette` on JiggAssembly only | Playthrough concern — product is not affected |
+| `palette` on `JiggAssembly` only | Playthrough concern — product is not affected |
+| `palette` persists on assembly | Playthrough preference — user's centroid choices survive reload |
 | Integrity severity tiers | Metadata changes don't corrupt a 90%-complete save |
 | Runtime dissection is sovereign | User chose their cut — artist default changes are informational only |
-| `RotationConfig` discriminated union | Forces mode decision at game creation — avoids floating-point bugs |
-| Clusters derived at runtime | clusterId shared value sufficient — explicit cluster records redundant |
-| Cluster reconstruction convention | Lowest PieceDefinition.index is group origin — deterministic |
-| Cluster merge tie-breaker on equal size | Lower origin index survives. Fully deterministic across devices with no coordination. |
-| Bench-entry `clusterId` rule removed | Dead code — bench is one-way, re-entry is impossible. Invariant alone is sufficient. |
-| NanoID(8) for clusterId | Collision-free across devices without central authority |
-| Engines MUST write only normalized `rot` | Prevents lazy-write implementations. Normalization on load is legacy safety net only. |
-| `assemblyProgress` cached on header | Structural completion visible on shelf without decompression |
-| `playTimeSeconds` on assembly | Cannot be reconstructed — must be tracked explicitly |
-| Per-player playTimeSeconds | Each .jiggstate tracks independently — multiplayer safe |
-| Status derived from lastSavedAt + completed | No separate status field needed |
-| `dissectedAt` absent | Not consistently meaningful across both dissection contexts |
-| `whimsies` in dissection only | Manifest signals cutStyle; dissection owns the shapes |
-| `credit` + `attributions[]` both present | Structured (machine) vs verbatim (legal) attribution |
+| `assemblyHash` over exact bytes, no normalization | Removes ambiguity across serializers — any reformatting produces a different hash |
+| `assemblyHash` on header | Self-healing cache — detects stale header without full assembly parse |
+| `completed` derived not stored | Eliminates sync risk — always computable from placedCount and pieceCount |
+| Single JiggState per .jigg | v1 simplicity. New game overwrites. Multiple playthroughs deferred. |
+| `JiggGlue` mismatch is fatal | Prevents rehydrating state onto a different puzzle |
 | Filename is UX only | Consumers always key on internal uri |
 
 ---
@@ -370,10 +470,12 @@ Rules not enforceable by the type system — engine must implement:
 - **Multiplayer / conflict resolution** — JiggGlue.uri enables sync.
   Merge precedence deferred pending multiplayer requirements.
 - **Deterministic clusterId** — hash(sorted(pieceIds)) for deterministic merge.
-  Deferred pending multiplayer.
-- **Floating point precision for free rotation** — define rounding convention
-  to prevent snap comparison drift. Engine convention, not type.
+  Deferred pending multiplayer requirements.
+- **Free rotation** — not part of the model. Revisit only if creative or
+  aesthetic modes are introduced post-launch.
+- **Multiple playthroughs per puzzle** — a .jigg currently holds at most one
+  JiggState. JiggGlue.uri is the extension point if replay history is
+  required post-launch.
 - **Formal invariants** — machine-checkable rules. Future validation layer.
 - **Version migration strategy** — specVersion exists as the signal.
   Forward/backward compatibility contract deferred until first breaking change.
-- **Multiple playthroughs UI** — JiggGlue.uri is the identity anchor when needed.
