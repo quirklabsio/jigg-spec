@@ -139,6 +139,10 @@ No `header.json` — .jiggsaw is not shelf-scanned.
 
 ## 6. JiggDissection (shared type)
 
+Dissection is a fully self-contained, immutable geometric description of a
+puzzle in pixel space. Assembly is strictly a runtime interpretation layer
+over it.
+
 Present in both `.jiggsaw` (default cut) and `.jiggstate` (runtime cut).
 In `.jiggstate`: user's choice at game creation. May differ from default.
 Written once. Immutable for the life of the playthrough.
@@ -146,12 +150,27 @@ Written once. Immutable for the life of the playthrough.
 Whimsy shape definitions live here — not in the manifest.
 The manifest signals `cutStyle`; the dissection owns the shapes.
 
+Top-level fields:
+- `image: { width, height }` — defines the canonical pixel space for all
+  piece geometry. All `canonical` coordinates are expressed in pixel space
+  of these dimensions. All canonical coordinates MUST be expressed in this
+  coordinate space — no alternative scaling is valid within Dissection.
+  Engines MUST NOT use `JiggManifest.image` dimensions for geometry work
+  at runtime.
+- `palette` — required. Canonical k-means palette derived during Chop from
+  `PieceDefinition.meanColor` values. Not recomputed at runtime. Must remain
+  consistent with `meanColor`. Immutable for the life of the dissection.
+  Source of truth when `JiggAssembly.palette` is absent.
+
 `PieceDefinition`:
 - `id` — sequential, scoped to dissection e.g. "p-001"
 - `templateId` — key into templates Record
-- `edgeType` — `"corner" | "edge" | "interior"`. Filter dimension.
-- `canonical` — normalized [0.0, 1.0], origin top-left, bounding box center.
-  `rot` is always literal `0`.
+- `edges: { top, right, bottom, left }` — each value `"flat" | "tab" | "blank"`.
+  `flat` = border edge. `tab` / `blank` = connectors. `edgeType` classification
+  (`corner` / `edge` / `interior`) is derivable at runtime and not stored.
+- `canonical: { x, y }` — position in pixel space of `image.width / image.height`,
+  origin top-left. Rotation is absent — rotation is a runtime property
+  (`PieceState.rot`) and never affects canonical geometry.
 - `index` — 1-based, left-to-right top-to-bottom. Stable across cut styles.
 - `meanColor` — arithmetic mean of pixels sampled across piece boundary.
   sRGB color space. Euclidean distance for nearest centroid mapping.
@@ -225,11 +244,13 @@ carries over unchanged and becomes user-manipulable.
 Initial rotation is a playthrough concern — not defined by the dissection.
 
 Palette:
-Default palette computed at game creation via k-means on piece meanColor values.
+`palette` is an optional user override. When absent, engine uses
+`JiggDissection.palette` without transformation — no merging, no blending.
+Mutating `JiggDissection.palette` is never valid; Assembly is the only
+override point.
 User may regenerate palette — new centroids overwrite JiggAssembly.palette.
 Palette persists across sessions as a playthrough preference.
 Engine maps each piece's meanColor to nearest centroid (Euclidean, sRGB) at runtime.
-If palette absent, engine uses meanColor directly.
 
 `playTimeSeconds`:
 - Active play time in seconds. Source of truth on assembly.
@@ -402,6 +423,12 @@ Rules not enforceable by the type system — engine must implement:
 - displayCredit derived from credit if present, else attributions[0].name
 - JiggGlue.puzzleUri mismatch on load is fatal — abort immediately
 - assemblyHash on header computed over exact archive bytes, no reformatting
+- Every non-border edge (`tab` or `blank`) MUST have a complementary matching
+  edge on the geometrically adjacent piece within the same dissection.
+  Complementary edges are inverse pairs: `tab ↔ blank`. `flat` edges are
+  unpaired. Engines MAY validate this on load.
+- Rotation is runtime-only. Engines MUST NOT apply or assume any rotation
+  when reading canonical geometry from Dissection.
 
 ---
 
@@ -449,6 +476,10 @@ Rules not enforceable by the type system — engine must implement:
 | sRGB + Euclidean distance | Deterministic palette mapping across clients |
 | `palette` on `JiggAssembly` only | Playthrough concern — product is not affected |
 | `palette` persists on assembly | Playthrough preference — user's centroid choices survive reload |
+| `edges` replaces `edgeType` | Connectivity is explicit and directional. `edgeType` was a lossy classification — derivable at runtime from `edges`. Deterministic neighbor matching requires per-edge data. |
+| `image` on `JiggDissection` | Dissection owns its coordinate space. Engine no longer depends on `JiggManifest.image` during runtime geometry work. |
+| `palette` on `JiggDissection` | Canonical palette is a product of the cut, not the playthrough. Dissection owns the baseline; Assembly overrides it. Prevents recomputation drift and Dissection mutation. |
+| `rot` removed from `canonical` | Canonical position is definitionally unrotated. Rotation is a runtime property (`PieceState.rot`) — it has no place in dissection geometry. |
 | Integrity severity tiers | Metadata changes don't corrupt a 90%-complete save |
 | Runtime dissection is sovereign | User chose their cut — artist default changes are informational only |
 | `assemblyHash` over exact bytes, no normalization | Removes ambiguity across serializers — any reformatting produces a different hash |

@@ -5,7 +5,6 @@
 export type HexCode     = string;
 export type SpecVersion = `${number}.${number}`;
 export type ImageSource = "embedded" | "url";
-export type EdgeType    = "corner" | "edge" | "interior";
 
 type CoreUriType = "artist" | "org" | "puzzle" | "state";
 type ExtensionUriType = `${string}.${string}`;
@@ -79,11 +78,15 @@ export interface PieceTemplate {
 export interface PieceDefinition {
   id: string;
   templateId: string;
-  edgeType: EdgeType;
+  edges: {
+    top: "flat" | "tab" | "blank";
+    right: "flat" | "tab" | "blank";
+    bottom: "flat" | "tab" | "blank";
+    left: "flat" | "tab" | "blank";
+  };
   canonical: {
     x: number;
     y: number;
-    rot: 0;
   };
   index: number;
   meanColor: HexCode;
@@ -98,6 +101,11 @@ export interface WhimsyDefinition {
 export interface JiggDissection {
   puzzleUri: JiggUri;
   specVersion: SpecVersion;
+  image: {
+    width: number;
+    height: number;
+  };
+  palette: HexCode[];
   pieces: PieceDefinition[];
   templates: Record<string, PieceTemplate>;
   whimsies?: Record<string, WhimsyDefinition>;
