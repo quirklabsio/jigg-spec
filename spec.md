@@ -16,6 +16,9 @@ Key principles:
 - Offline-first identity — URIs locally generated, globally valid
 - Stage naming reflects interaction model, not correctness semantics
 - Correctness is owned entirely by `placed: boolean`, not stage identity
+- Each normative rule is defined in exactly one section. Other sections
+  reference it. Section 11 (Engine Conventions) is an informative checklist,
+  not a second source of truth.
 
 ---
 
@@ -51,6 +54,12 @@ Identity hierarchy:
 | Global | `jigg:{type}:{nanoid22}` | Forever |
 | User resource | `nanoid(8)` | Life of playthrough — user tray IDs, cluster IDs |
 | Local atom | `p-001`, `t-001` | Life of puzzle version |
+
+Scheduling and catalog facts live outside the format. Which puzzle is
+"daily #N", where it appears in a storefront, and when it was published are
+service-layer facts keyed by `uri`. The format MUST NOT grow fields encoding
+schedule or catalog position. Puzzles are keyed solely by `uri`; anything
+else (title, filename) is display metadata.
 
 Deferred: Attribution Registry — maps JiggUri to full entity records.
 
@@ -114,7 +123,7 @@ No `header.json` — .jiggsaw is not shelf-scanned.
 
 `JiggManifest`:
 - `uri` — canonical identity, locally generated, stable forever
-- `specVersion` — for parsing
+- `specVersion` — see §10 Versioning & Compatibility
 - `title`, `aspectRatio`
 - `attributions[]` — ordered array, primary is `[0]`
   Roles: artist, illustrator, photographer, publisher, brand, extensible string
@@ -179,6 +188,13 @@ Top-level fields:
   no piece records touched.
 - `whimsyId` — absent for standard pieces
 
+Edge complementarity: every non-border edge (`tab` or `blank`) MUST have a
+complementary matching edge on the geometrically adjacent piece within the
+same dissection. Complementary edges are inverse pairs: `tab ↔ blank`.
+`flat` edges are unpaired. **Producers MUST emit dissections satisfying this
+rule. Engines MAY validate it on load.** The obligation sits with the
+generator; validation by consumers is optional defense.
+
 `PieceTemplate` — id, path (SVG), width, height, anchorPoint
 Templates Record keyed by templateId for O(1) lookup — hydrated once on load.
 
@@ -199,15 +215,17 @@ Zip entry table:
 | 1 | `glue.json` | Stored | Once at game creation |
 | 2 | `dissection.json` | Deflate | Once at game creation |
 | 3 | `assembly.json` | Deflate | Every save |
+| 4 | `moves.jsonl` | Deflate | Appended on save (optional entry) |
 
-`glue.json` — named after puzzle glue, the physical product used to seal and
-preserve a completed jigsaw. Here it permanently binds the playthrough to the
-puzzle. Written once at game creation, never mutated. Stored uncompressed for
-zero-decompression fast-fail identity checks.
-Engine reads glue.json before decompressing anything else. If puzzleUri
-mismatches the current .jigg bundle, load is aborted immediately.
+### JiggGlue (`glue.json`)
 
-`JiggGlue`:
+Named after puzzle glue — the physical product used to seal and preserve a
+completed jigsaw. Here it permanently binds the playthrough to the puzzle.
+Written once at game creation, never mutated. Stored uncompressed for
+zero-decompression fast-fail identity checks: engine reads glue.json before
+decompressing anything else.
+
+Fields:
 - `uri` — playthrough identity, generated at game creation, stable forever.
   Enables device sync, conflict resolution, future multiplayer.
 - `puzzleUri` — references JiggManifest.uri. Identity anchor.
@@ -217,7 +235,35 @@ mismatches the current .jigg bundle, load is aborted immediately.
   what changed. State remains valid in all cases.
 - `createdAt` — ISO 8601. When this playthrough was started.
 
-`JiggAssembly`:
+On load, engines MUST treat JiggGlue as immutable. Any mismatch between
+glue.puzzleUri and the loaded puzzle's uri MUST be treated as invalid
+state — load MUST be aborted immediately.
+
+A .jigg contains at most one JiggState. Starting a new game overwrites the
+existing .jiggstate entirely. The previous playthrough is not preserved.
+JiggGlue.uri is stable for the life of a single playthrough only — a new
+game generates a new uri.
+
+### Solve log (`moves.jsonl`)
+
+Optional append-only event log of the playthrough. Provenance, not a header
+source of truth.
+
+- One self-contained JSON object per line.
+- Each event MUST carry `seq` (integer, strictly increasing from 1, no gaps)
+  and `at` (ISO 8601 timestamp). Remaining event schema is owned by the
+  solve-log specification and versioned independently of this format.
+- Engines that write the log MUST append only — existing lines are never
+  rewritten, reordered, or deleted for the life of the playthrough.
+- Engines that do not understand the entry MUST preserve it unchanged when
+  rewriting the archive (see §10 unknown-entry rule).
+- The log is subordinate to `assembly.json`: header fields and progress
+  metrics are computed from assembly, never from the log. The log exists so
+  a playthrough's history is portable, replayable, and auditable — including
+  by future server-side validation.
+- Timestamps in the log are client-reported and carry no authority.
+
+### JiggAssembly (`assembly.json`)
 
 Rotation is cardinal only. Engines MUST support exactly four orientations:
 0, 90, 180, 270 degrees. No configuration exists — this is fixed for all
@@ -277,8 +323,10 @@ placed: boolean is the sole correctness authority. Non-optional.
 Engine sets placed: true when a piece locks to its canonical position.
 placed is a state flag — it is not a stage and does not imply a stage transition.
 Engines SHOULD ensure placed pieces reside in STAGE_TABLE.
-placed === true implies clusterId is absent.
+
+**Invariant P1:** `placed === true` implies `clusterId` is absent.
 Engine MUST enforce this invariant immediately on transition.
+(Referenced by the cluster model below and by §11.)
 
 If an engine allows a placed piece to become unplaced, it MUST be treated
 as a new unconnected piece with clusterId absent and placed: false.
@@ -302,43 +350,17 @@ origin piece (lowest PieceDefinition.index) MUST remain fixed in world space.
 All absorbed piece positions MUST be recomputed relative to that origin.
 
 No cluster breakup exists.
-placed === true implies clusterId is absent.
-Engine MUST enforce this invariant immediately on transition.
+Invariant P1 applies (placed pieces carry no clusterId).
 clusterId MUST be absent for STAGE_BENCH pieces.
 clusterId MUST be absent for all pieces at game creation.
 
-`JiggGlue`:
-JiggGlue is named after puzzle glue — the physical product used to seal
-and preserve a completed jigsaw. It permanently binds a playthrough to its
-puzzle. Written once at game creation, never mutated.
-
-Fields:
-- uri: playthrough identity, generated at game creation, stable forever
-- puzzleUri: references JiggManifest.uri — identity anchor
-- manifestHash: SHA-256 of manifest.json at game creation time
-- createdAt: ISO 8601 — when this playthrough was started
-
-On load, engines MUST treat JiggGlue as immutable. Any mismatch between
-glue.puzzleUri and the loaded puzzle's uri MUST be treated as invalid
-state — load MUST be aborted.
-
-A .jigg contains at most one JiggState. Starting a new game overwrites
-the existing .jiggstate entirely. The previous playthrough is not preserved.
-JiggGlue.uri is stable for the life of a single playthrough only — a new
-game generates a new uri.
-
-Progress metrics:
+Progress metrics (canonical definitions — §8 caches these on the header):
 - `placedCount` — pieces correctly solved at canonical position.
   Exact canonical match. Never loosened.
 - `assemblyProgress` — `1 - (clusterCount - 1) / (pieceCount - 1)`.
   0.0 = all pieces separate. 1.0 = single cluster.
   Guard required: return 1.0 when pieceCount === 1. Clamp to [0, 1].
 - `playTimeSeconds` — cached on header from assembly on every save.
-
-Status derivation (engine and UI must follow):
-- `lastSavedAt` absent → not-started
-- `lastSavedAt` present + `placedCount < pieceCount` → in-progress
-- `placedCount === pieceCount` → completed
 
 ---
 
@@ -366,10 +388,11 @@ sources on every save.
 
 Fields:
 - `uri` — references JiggManifest.uri
-- `specVersion` — for parsing
+- `specVersion` — see §10 Versioning & Compatibility
 - `title`, `displayCredit`, `aspectRatio` — cached from manifest at import
 - `pieceCount` — cached from dissection, never changes after game creation
-- `placedCount`, `assemblyProgress`, `playTimeSeconds` — updated on every save
+- `placedCount`, `assemblyProgress`, `playTimeSeconds` — cached from
+  assembly on every save; definitions in §7 Progress metrics
 - `assemblyHash` — SHA-256 of assembly.json, computed over its exact byte
   contents as stored in the archive (no reformatting, normalization, or
   parsing). Absent if never saved. On load: if present, hash the current
@@ -379,13 +402,10 @@ Fields:
 - `lastSavedAt` — absent until first save. Presence = started.
 - `completed` is derived: placedCount === pieceCount. Not stored.
 
-assemblyProgress = 1 - (clusterCount - 1) / (pieceCount - 1)
-Guard: return 1.0 when pieceCount === 1. Clamp to [0, 1].
-
-Status derivation:
-- lastSavedAt absent → not-started
-- lastSavedAt present + placedCount < pieceCount → in-progress
-- placedCount === pieceCount → completed
+Status derivation (canonical — engine and UI must follow):
+- `lastSavedAt` absent → not-started
+- `lastSavedAt` present + `placedCount < pieceCount` → in-progress
+- `placedCount === pieceCount` → completed
 
 Authoritative sources:
 - puzzle.jiggsaw → uri, title, displayCredit, aspectRatio, pieceCount
@@ -401,38 +421,78 @@ Applies to all three formats.
 
 ---
 
-## 10. Engine Conventions
+## 10. Versioning & Compatibility
 
-Rules not enforceable by the type system — engine must implement:
+`specVersion` is a single integer. It increments **only on breaking change**
+— a change such that a conforming engine for version N cannot safely read a
+version N+1 file. Additive changes (new optional JSON fields, new optional
+zip entries, new URI extension types) do NOT bump specVersion.
 
-- All pieces initialised to STAGE_BENCH at game creation
-- Engine MUST NOT assign `"table"` or `"bench"` as a UserStageId
-- Movement to STAGE_BENCH rejected unless source is also STAGE_BENCH
-- Ghost tray: pieces referencing missing stageId move to STAGE_TABLE
-- On bench extraction: engine MUST assign a valid pos before writing state
-- placed === true implies clusterId absent; engine enforces immediately
-- Engines SHOULD ensure placed pieces reside in STAGE_TABLE
-- assemblyProgress guard: return 1.0 when pieceCount === 1; clamp to [0, 1]
-- Cardinal rotation only — engines MUST write only normalized rot values
-- rot normalization: wrap to [0, 360), snap to nearest cardinal, ties clockwise
-- Random cardinal rot assigned to every piece at game creation
-- No rotation interaction while piece is in STAGE_BENCH
-- playTimeSeconds increments only during active interaction
-- clusterId is NanoID(8) — generated fresh at every snap event
-- Engines MUST NOT merge clusters with incompatible rotations
-- displayCredit derived from credit if present, else attributions[0].name
-- JiggGlue.puzzleUri mismatch on load is fatal — abort immediately
-- assemblyHash on header computed over exact archive bytes, no reformatting
-- Every non-border edge (`tab` or `blank`) MUST have a complementary matching
-  edge on the geometrically adjacent piece within the same dissection.
-  Complementary edges are inverse pairs: `tab ↔ blank`. `flat` edges are
-  unpaired. Engines MAY validate this on load.
-- Rotation is runtime-only. Engines MUST NOT apply or assume any rotation
-  when reading canonical geometry from Dissection.
+Contract, normative for all three formats:
+
+**Unknown fields.** Engines MUST ignore JSON fields they do not recognize.
+Engines SHOULD preserve unknown fields when rewriting a JSON entry they
+otherwise modify; engines MUST NOT fail on their presence.
+
+**Unknown zip entries.** Engines MUST ignore zip entries they do not
+recognize on load, and MUST preserve them byte-for-byte when rewriting an
+archive. (This is what makes optional entries like `moves.jsonl` safe.)
+
+**Same specVersion.** Full read/write compatibility guaranteed.
+
+**Older file, newer engine.** Engines MUST load files with a lower
+specVersion. On save, engines MAY upgrade the file to their current
+specVersion; if they do, all entries MUST be rewritten consistently and the
+upgrade MUST be lossless with respect to fields the engine understands.
+
+**Newer file, older engine.** Engines MUST NOT write to a file whose
+specVersion exceeds the highest version they implement. They MAY attempt a
+best-effort read-only load, surfacing to the user that the file was created
+by a newer version; they MUST NOT silently drop content or persist any
+modification.
+
+**Immutability boundary.** `.jiggsaw` content and `glue.json` +
+`dissection.json` within `.jiggstate` are immutable regardless of version
+upgrades. A specVersion upgrade re-serializes mutable entries only
+(`header.json`, `assembly.json`); immutable entries are carried
+byte-for-byte, preserving all content hashes.
 
 ---
 
-## 11. Key Architectural Decisions
+## 11. Engine Conventions (informative checklist)
+
+This section is a convenience index of rules not enforceable by the type
+system. It is **informative** — the normative definition of each rule lives
+in the referenced section. On any discrepancy, the referenced section wins.
+
+- All pieces initialised to STAGE_BENCH at game creation (§4, §7)
+- Engine MUST NOT assign `"table"` or `"bench"` as a UserStageId (§4)
+- Movement to STAGE_BENCH rejected unless source is also STAGE_BENCH (§4)
+- Ghost tray: pieces referencing missing stageId move to STAGE_TABLE (§4)
+- On bench extraction: engine MUST assign a valid pos before writing state (§4)
+- Invariant P1: placed === true implies clusterId absent; enforced immediately (§7)
+- Engines SHOULD ensure placed pieces reside in STAGE_TABLE (§7)
+- assemblyProgress guard: return 1.0 when pieceCount === 1; clamp to [0, 1] (§7)
+- Cardinal rotation only — engines MUST write only normalized rot values (§7)
+- rot normalization: wrap to [0, 360), snap to nearest cardinal, ties clockwise (§7)
+- Random cardinal rot assigned to every piece at game creation (§7)
+- No rotation interaction while piece is in STAGE_BENCH (§7)
+- playTimeSeconds increments only during active interaction (§7)
+- clusterId is NanoID(8) — generated fresh at every snap event (§7)
+- Engines MUST NOT merge clusters with incompatible rotations (§7)
+- moves.jsonl is append-only; preserved even when not understood (§7, §10)
+- displayCredit derived from credit if present, else attributions[0].name (§5)
+- JiggGlue.puzzleUri mismatch on load is fatal — abort immediately (§7)
+- assemblyHash on header computed over exact archive bytes, no reformatting (§8)
+- Edge complementarity: producers MUST emit valid dissections; engines MAY
+  validate on load (§6)
+- Rotation is runtime-only. Engines MUST NOT apply or assume any rotation
+  when reading canonical geometry from Dissection (§6)
+- Unknown fields ignored; unknown zip entries preserved byte-for-byte (§10)
+
+---
+
+## 12. Key Architectural Decisions
 
 | Decision | Rationale |
 |---|---|
@@ -441,7 +501,11 @@ Rules not enforceable by the type system — engine must implement:
 | `glue.json` uncompressed in .jiggstate | Fast-fail identity check before decompression |
 | `JiggGlue` named after puzzle glue | Physical metaphor — seals playthrough to puzzle permanently |
 | No header on .jiggstate | Progress lives in .jigg header |
-| `SpecVersion` not SemVer | Patch versions meaningless for a file format |
+| `SpecVersion` single integer, breaking changes only | Patch versions meaningless for a file format; additive changes are absorbed by the unknown-field/entry rules |
+| Unknown entries preserved byte-for-byte | Optional entries (e.g. moves.jsonl) and future additions survive round-trips through older engines |
+| `moves.jsonl` optional in .jiggstate | An exported .jigg carries its full provenance — replayable, auditable, server-validatable later. Optional so minimal engines stay conformant. |
+| Solve log subordinate to assembly | Header fields computed from assembly only — log is history, not state |
+| Scheduling/catalog facts outside the format | Daily numbering etc. are service-layer facts keyed by uri. Keeps immutable files from encoding mutable relationships. |
 | `JiggUri` locked core type union | No open string fallback — new core types require spec change |
 | Extension URI types namespaced | Third-party types are distinguishable and safe to ignore |
 | `JiggManifest` not `JiggSawManifest` | Concept-only naming. Manifest belongs to the puzzle, not the format container. |
@@ -451,7 +515,7 @@ Rules not enforceable by the type system — engine must implement:
 | `placed` is a state flag, not a stage | Prevents implementors treating placement as a stage transition |
 | `placed` sole correctness authority | Decoupled from stage — stage is a consequence of placement, not a co-constraint |
 | Engines SHOULD move placed pieces to `STAGE_TABLE` | Preserves expected UX without hard-coupling placed to stage |
-| `placed === true` implies `clusterId` absent | A placed piece is solved and individual — group membership ends at placement |
+| Invariant P1 (`placed` → no `clusterId`) | A placed piece is solved and individual — group membership ends at placement |
 | Unplaced piece rule | Keeps invariant total if UX evolves to allow unplacing |
 | `stageId` always explicit | Eliminates undefined/bench ambiguity in serialization |
 | `UserStageId` type | Makes user tray ID intent explicit in the type system |
@@ -477,6 +541,7 @@ Rules not enforceable by the type system — engine must implement:
 | `palette` on `JiggAssembly` only | Playthrough concern — product is not affected |
 | `palette` persists on assembly | Playthrough preference — user's centroid choices survive reload |
 | `edges` replaces `edgeType` | Connectivity is explicit and directional. `edgeType` was a lossy classification — derivable at runtime from `edges`. Deterministic neighbor matching requires per-edge data. |
+| Edge complementarity is a producer obligation | Generators MUST emit valid dissections; consumer validation is optional defense, not the enforcement point |
 | `image` on `JiggDissection` | Dissection owns its coordinate space. Engine no longer depends on `JiggManifest.image` during runtime geometry work. |
 | `palette` on `JiggDissection` | Canonical palette is a product of the cut, not the playthrough. Dissection owns the baseline; Assembly overrides it. Prevents recomputation drift and Dissection mutation. |
 | `rot` removed from `canonical` | Canonical position is definitionally unrotated. Rotation is a runtime property (`PieceState.rot`) — it has no place in dissection geometry. |
@@ -488,10 +553,11 @@ Rules not enforceable by the type system — engine must implement:
 | Single JiggState per .jigg | v1 simplicity. New game overwrites. Multiple playthroughs deferred. |
 | `JiggGlue` mismatch is fatal | Prevents rehydrating state onto a different puzzle |
 | Filename is UX only | Consumers always key on internal uri |
+| §11 checklist is informative | Each rule normative in exactly one section — duplicated normative text diverges under maintenance |
 
 ---
 
-## 12. Deferred
+## 13. Deferred
 
 - **Tags** — controlled vocabulary tag registry. TagId type and TAG_REGISTRY
   planned in future tags.ts.
@@ -504,9 +570,12 @@ Rules not enforceable by the type system — engine must implement:
   Deferred pending multiplayer requirements.
 - **Free rotation** — not part of the model. Revisit only if creative or
   aesthetic modes are introduced post-launch.
+- **Deterministic scatter** — initial rotation and bench-extraction scatter
+  may later be seeded from puzzle × player identity for competitive fairness.
+  Random is fine for v1.
 - **Multiple playthroughs per puzzle** — a .jigg currently holds at most one
   JiggState. JiggGlue.uri is the extension point if replay history is
   required post-launch.
 - **Formal invariants** — machine-checkable rules. Future validation layer.
-- **Version migration strategy** — specVersion exists as the signal.
-  Forward/backward compatibility contract deferred until first breaking change.
+- **Solve-log event schema** — owned by the solve-log specification.
+  This format mandates only the container rules for `moves.jsonl` (§7).
