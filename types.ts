@@ -1,9 +1,21 @@
 // =============================================================================
 // JIGG SPEC — types.ts
+//
+// These types define the PERSISTED shape of jigg data. Runtime enrichments
+// (single-piece groups, bench layout, camera state) are engine-internal and
+// deliberately have no types here — see "Runtime / persistence boundary" in
+// the spec (§7).
 // =============================================================================
 
 export type HexCode     = string;
+
+/**
+ * `{major}.{minor}`. Major carries the compatibility contract (§10) —
+ * engines compare majors only. Minor increments on additive change and is
+ * informational.
+ */
 export type SpecVersion = `${number}.${number}`;
+
 export type ImageSource = "embedded" | "url";
 
 type CoreUriType = "artist" | "org" | "puzzle" | "state";
@@ -99,6 +111,11 @@ export interface WhimsyDefinition {
 }
 
 export interface JiggDissection {
+  /**
+   * Binding to the puzzle this cut belongs to. References JiggManifest.uri.
+   * Second identity anchor alongside JiggGlue.puzzleUri — a dissection is
+   * never valid against a different puzzle.
+   */
   puzzleUri: JiggUri;
   specVersion: SpecVersion;
   image: {
@@ -152,12 +169,34 @@ export interface PieceState {
    * load is a safety net for invalid or legacy data only.
    */
   rot: number;
+  /**
+   * Stacking order within the global coordinate space. Higher renders above.
+   * MUST be absent for STAGE_BENCH pieces — bench pieces do not participate
+   * in the coordinate space, stacking included (same rule as pos).
+   * Optional elsewhere: absent = engine-defined order. Engines that persist
+   * z SHOULD renormalize to a dense sequence on save so values do not grow
+   * unboundedly. Pieces within a cluster share the cluster's stacking level;
+   * relative z within a cluster is not meaningful.
+   */
   z?: number;
   /**
-   * Authoritative. Generated at snap time (NanoID 8).
-   * Absent = unconnected.
-   * placed === true implies clusterId is absent.
-   * Engine MUST enforce this invariant immediately on transition.
+   * PERSISTED SEMANTICS: presence encodes a fact — this piece is physically
+   * connected to at least one other. Absent = unconnected. It does not
+   * encode group membership.
+   *
+   * Generated at snap time (NanoID 8). Authoritative — never derived from
+   * the spatial graph.
+   *
+   * Runtime / persistence boundary (§7): engines MAY model unconnected
+   * table pieces as single-piece groups at runtime for a uniform operation
+   * interface. Those runtime IDs MUST NOT reach this field — the save
+   * boundary omits clusterId for any unplaced piece whose runtime group has
+   * exactly one member. The strip is a projection: the live model is not
+   * mutated. Load MAY reconstruct single-piece groups; reconstruction is
+   * engine-internal.
+   *
+   * Invariant P1: placed === true implies clusterId is absent.
+   * Engine MUST enforce immediately on transition.
    * MUST be absent for STAGE_BENCH pieces — no clustering on bench.
    * MUST be absent for all pieces at game creation.
    */
@@ -171,9 +210,9 @@ export interface JiggAssembly {
   palette?: HexCode[];
   stages: StageDefinition[];
   pieces: PieceState[];
-  view: {
-    camera: { x: number; y: number; zoom: number };
-  };
+  // view/camera state is deliberately NOT part of the format.
+  // It is device-scoped, not playthrough-scoped — engines persist it
+  // locally, keyed by JiggGlue.uri.
 }
 
 export interface JiggState {
@@ -191,6 +230,13 @@ export interface JiggHeader {
   aspectRatio?: number;
   pieceCount: number;
   placedCount: number;
+  /**
+   * 1 - (clusterCount - 1) / (pieceCount - 1), clamped to [0, 1];
+   * 1.0 when pieceCount === 1.
+   * clusterCount (see §7): distinct persisted clusterIds
+   *   + unplaced pieces with no clusterId (each its own unit)
+   *   + 1 if any piece is placed (the solved region is one unit).
+   */
   assemblyProgress?: number;
   playTimeSeconds?: number;
   /**
